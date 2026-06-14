@@ -4,6 +4,9 @@ import { buildUserPrompt, SYSTEM_PROMPT } from "../src/systemPrompt.js";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const MAX_LINE_TEXT_LENGTH = 4900;
+const SHEET_CSV_URL = process.env.SHEET_CSV_URL;
+const FAQ_CACHE_MS = 5 * 60 * 1000;
+let faqCache = { text: "", expiresAt: 0 };
 
 let lineClient;
 let genAI;
@@ -64,12 +67,15 @@ async function handleLineEvent(event) {
 }
 
 async function generateReply(message) {
+  const faqText = await getFaqText();
+
   const response = await getGenAI().models.generateContent({
     model: GEMINI_MODEL,
     contents: buildUserPrompt({
       message,
-      faqText: process.env.PLUTO_FAQ,
+      faqText,
     }),
+    
     config: {
       systemInstruction: SYSTEM_PROMPT,
       temperature: 0.3,
@@ -77,6 +83,101 @@ async function generateReply(message) {
   });
 
   return response.text?.trim() || "ขออภัยค่ะ ระบบยังตอบไม่ได้ เดี๋ยวให้ทีมงานช่วยยืนยันให้นะคะ";
+}
+
+async function getFaqText() {
+  const fallbackFaq = process.env.PLUTO_FAQ || "";
+
+  if (!SHEET_CSV_URL) {
+    return fallbackFaq;
+  }
+
+  const now = Date.now();
+  if (faqCache.text && faqCache.expiresAt > now) {
+    return faqCache.text;
+  }
+
+  try {
+    const response = await fetch(SHEET_CSV_URL);
+
+    if (!response.ok) {
+      console.error("Failed to fetch FAQ CSV", response.status);
+      return fallbackFaq;
+    }
+
+    const csvText = await response.text();
+    const faqText = csvToFaqText(csvText);
+
+    faqCache = {
+      text: faqText || fallbackFaq,
+      expiresAt: now + FAQ_CACHE_MS,
+    };
+
+    return faqCache.text;
+  } catch (error) {
+    console.error("Failed to load FAQ CSV", error);
+    return fallbackFaq;
+  }
+}
+
+function csvToFaqText(csvText) {
+  const rows = parseCsv(csvText);
+  const dataRows = rows.slice(1).filter((row) => row.length >= 3);
+
+  return dataRows
+    .map(([category, question, answer]) => {
+      return `หมวด: ${category || "-"}\nคำถาม: ${question || "-"}\nคำตอบ: ${answer || "-"}`;
+    })
+    .join("\n\n");
+}
+
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (char === '"' && inQuotes && nextChar === '"') {
+      cell += '"';
+      i += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && nextChar === "\n") {
+        i += 1;
+      }
+
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+
+  return rows;
 }
 
 function hasRequiredEnv() {
