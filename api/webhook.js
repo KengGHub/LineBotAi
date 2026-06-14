@@ -21,6 +21,17 @@ export default async function handler(req, res) {
   const rawBody = await readRawBody(req);
   const signature = req.headers["x-line-signature"];
 
+  let payload;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch (error) {
+    return res.status(400).json({ error: "Invalid JSON body" });
+  }
+
+  if (!payload.events?.length) {
+    return res.status(200).json({ ok: true });
+  }
+
   if (!hasRequiredEnv()) {
     console.error("Missing required environment variables");
     return res.status(500).json({ error: "Server is not configured" });
@@ -28,13 +39,6 @@ export default async function handler(req, res) {
 
   if (!signature || !validateSignature(rawBody, process.env.LINE_CHANNEL_SECRET, signature)) {
     return res.status(401).json({ error: "Invalid LINE signature" });
-  }
-
-  let payload;
-  try {
-    payload = JSON.parse(rawBody);
-  } catch (error) {
-    return res.status(400).json({ error: "Invalid JSON body" });
   }
 
   await Promise.all((payload.events || []).map(handleLineEvent));
