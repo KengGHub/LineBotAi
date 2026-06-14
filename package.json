@@ -1,0 +1,29 @@
+{
+  "name": "linebotai",
+  "version": "1.0.0",
+  "description": "set up a line bot ai to answer all the questions from prospect",
+  "type": "module",
+  "main": "api/webhook.js",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "dev": "npx vercel dev",
+    "test": "node --check api/webhook.js && node --check src/systemPrompt.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KengGHub/LineBotAi.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/KengGHub/LineBotAi/issues"
+  },
+  "homepage": "https://github.com/KengGHub/LineBotAi#readme",
+  "dependencies": {
+    "@google/genai": "^2.8.0",
+    "@line/bot-sdk": "^11.0.1"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "framework": null,
+  "buildCommand": null,
+  "outputDirectory": null,
+  "installCommand": "npm install",
+  "functions": {
+    "api/webhook.js": {
+      "maxDuration": 10
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/webhook",
+      "destination": "/api/webhook"
+    }
+  ]
+}
