@@ -11,6 +11,20 @@ const MAX_DIRECT_FAQ_ROWS = 3;
 const MAX_HISTORY_MESSAGES = 6;
 const AI_RETRY_DELAY_MS = 900;
 const FALLBACK_REPLY = "ขออภัยค่ะ ระบบกำลังเช็กข้อมูลให้ แอดมินจะช่วยยืนยันให้นะคะ";
+const PRODUCT_TERM_GROUPS = [
+  ["pro5", "โปรไฟว์", "พลูโตเม็ด", "pluto pro5"],
+  ["s1", "เอส1"],
+  ["s2", "เอส2"],
+  ["vita", "ไวต้า"],
+  ["101"],
+  ["201"],
+  ["prosoil", "โปรซอย", "โปรซอยล์", "aa prosoil"],
+  ["nitro", "ไนโตร"],
+  ["ktro", "เคโตร"],
+  ["tko", "ทีเคโอ"],
+  ["greenpluz", "greenpluz+", "กรีนพลัส"],
+  ["ดินฟุ", "dinfu"],
+];
 
 let faqCache = { rows: [], text: "", expiresAt: 0 };
 const userMemory = new Map();
@@ -84,7 +98,7 @@ async function generateReply(message, history = []) {
   try {
     const faq = await getFaqData();
     selectedFaqRows = selectRelevantFaqRows(faq.rows, message, history);
-    const relevantFaqText = faqRowsToText(selectedFaqRows) || faq.text;
+    const relevantFaqText = faqRowsToText(selectedFaqRows) || getNoMatchingFaqText(message, history) || faq.text;
 
     const response = await generateAiContent({
       message: buildMessageWithHistory(message, history),
@@ -190,9 +204,22 @@ async function getFaqData() {
 
 function csvToFaqRows(csvText) {
   const rows = parseCsv(csvText);
-  return rows
-    .slice(1)
-    .filter((row) => row.length >= 3)
+
+  const headerIndex = rows.findIndex((row) => {
+    const headerText = normalizeSearchText(row.join(" "));
+    return headerText.includes("คำถาม") && headerText.includes("คำตอบ");
+  });
+  const dataRows = rows.slice(headerIndex >= 0 ? headerIndex + 1 : 1);
+
+  return dataRows
+    .filter((row) => {
+      if (row.length < 3) {
+        return false;
+      }
+
+      const [, question, answer] = row;
+      return hasUsefulFaqCell(question) && hasUsefulFaqCell(answer);
+    })
     .map(([category, question, answer]) => ({
       category: category || "-",
       question: question || "-",
@@ -209,6 +236,11 @@ function faqRowsToText(rows) {
     .join("\n\n");
 }
 
+function hasUsefulFaqCell(value) {
+  const text = String(value || "").trim();
+  return Boolean(text && text !== "-" && text.length > 3);
+}
+
 function selectRelevantFaqRows(rows, message, history) {
   if (!rows.length) {
     return [];
@@ -223,6 +255,7 @@ function selectRelevantFaqRows(rows, message, history) {
     ].join(" "),
   );
   const terms = getSearchTerms(query);
+  const productTermGroups = getMatchedProductTermGroups(query);
 
   if (!terms.length) {
     return rows.slice(0, MAX_SELECTED_FAQ_ROWS);
@@ -237,9 +270,17 @@ function selectRelevantFaqRows(rows, message, history) {
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score || a.index - b.index);
 
+  if (productTermGroups.length) {
+    const productRows = scoredRows.filter((item) => {
+      return productTermGroups.some((group) => group.some((term) => item.row.searchText.includes(term)));
+    });
+
+    return productRows.slice(0, MAX_SELECTED_FAQ_ROWS).map((item) => item.row);
+  }
+
   const selectedRows = scoredRows.length
     ? scoredRows.slice(0, MAX_SELECTED_FAQ_ROWS).map((item) => item.row)
-    : rows.slice(0, MAX_SELECTED_FAQ_ROWS);
+    : [];
 
   return selectedRows;
 }
@@ -273,12 +314,18 @@ function buildDirectFaqReply(rows, message) {
   const answers = usefulRows
     .map((row) => {
       const category = row.category && row.category !== "-" ? `${row.category}: ` : "";
-      return `- ${category}${row.answer}`;
+      return `• ${category}${cleanFaqAnswer(row.answer)}`;
     })
     .join("\n");
   const outro = "ถ้าพี่บอกพืช/อาการ/อายุต้นเพิ่มได้ แอดมินจะช่วยเช็กให้ตรงขึ้นค่ะ";
 
   return `${intro}\n${answers}\n\n${outro}`;
+}
+
+function cleanFaqAnswer(answer) {
+  return String(answer || "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function getSearchTerms(text) {
@@ -337,6 +384,31 @@ function getSearchTerms(text) {
     .forEach((term) => terms.add(term));
 
   return [...terms].slice(0, 24);
+}
+
+function getMatchedProductTermGroups(text) {
+  return PRODUCT_TERM_GROUPS
+    .map((group) => group.map((term) => normalizeSearchText(term)))
+    .filter((group) => group.some((term) => text.includes(term)));
+}
+
+function getNoMatchingFaqText(message, history) {
+  const query = normalizeSearchText(
+    [
+      message,
+      ...history
+        .slice(-4)
+        .map((item) => item.text),
+    ].join(" "),
+  );
+
+  const productTermGroups = getMatchedProductTermGroups(query);
+  if (!productTermGroups.length) {
+    return "";
+  }
+
+  const productNames = productTermGroups.map((group) => group[0]).join(", ");
+  return `ไม่มีข้อมูลสินค้า/คำถาม "${productNames}" ใน FAQ ที่ระบบอ่านได้ตอนนี้ ห้ามเดาราคา วิธีใช้ ปริมาณใช้ หรือคุณสมบัติ ให้แจ้งว่าจะให้ทีมงานช่วยยืนยัน`;
 }
 
 function normalizeSearchText(value) {
