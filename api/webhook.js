@@ -7,6 +7,7 @@ const MAX_LINE_TEXT_LENGTH = 4900;
 const SHEET_CSV_URL = process.env.SHEET_CSV_URL;
 const FAQ_CACHE_MS = 5 * 60 * 1000;
 const MAX_SELECTED_FAQ_ROWS = 18;
+const MAX_DIRECT_FAQ_ROWS = 3;
 const MAX_HISTORY_MESSAGES = 6;
 const FALLBACK_REPLY = "ขออภัยค่ะ ระบบกำลังเช็กข้อมูลให้ แอดมินจะช่วยยืนยันให้นะคะ";
 
@@ -77,9 +78,12 @@ async function handleLineEvent(event) {
 }
 
 async function generateReply(message, history = []) {
+  let selectedFaqRows = [];
+
   try {
     const faq = await getFaqData();
-    const relevantFaqText = selectRelevantFaqText(faq.rows, message, history) || faq.text;
+    selectedFaqRows = selectRelevantFaqRows(faq.rows, message, history);
+    const relevantFaqText = faqRowsToText(selectedFaqRows) || faq.text;
 
     const response = await getGenAI().models.generateContent({
       model: GEMINI_MODEL,
@@ -97,6 +101,11 @@ async function generateReply(message, history = []) {
     return response.text?.trim() || FALLBACK_REPLY;
   } catch (error) {
     console.error("Failed to generate reply", error);
+    const directFaqReply = buildDirectFaqReply(selectedFaqRows, message);
+    if (directFaqReply) {
+      return directFaqReply;
+    }
+
     return FALLBACK_REPLY;
   }
 }
@@ -168,9 +177,9 @@ function faqRowsToText(rows) {
     .join("\n\n");
 }
 
-function selectRelevantFaqText(rows, message, history) {
+function selectRelevantFaqRows(rows, message, history) {
   if (!rows.length) {
-    return "";
+    return [];
   }
 
   const query = normalizeSearchText(
@@ -184,7 +193,7 @@ function selectRelevantFaqText(rows, message, history) {
   const terms = getSearchTerms(query);
 
   if (!terms.length) {
-    return faqRowsToText(rows.slice(0, MAX_SELECTED_FAQ_ROWS));
+    return rows.slice(0, MAX_SELECTED_FAQ_ROWS);
   }
 
   const scoredRows = rows
@@ -200,7 +209,7 @@ function selectRelevantFaqText(rows, message, history) {
     ? scoredRows.slice(0, MAX_SELECTED_FAQ_ROWS).map((item) => item.row)
     : rows.slice(0, MAX_SELECTED_FAQ_ROWS);
 
-  return faqRowsToText(selectedRows);
+  return selectedRows;
 }
 
 function scoreFaqRow(text, terms) {
@@ -211,6 +220,33 @@ function scoreFaqRow(text, terms) {
 
     return score;
   }, 0);
+}
+
+function buildDirectFaqReply(rows, message) {
+  const usefulRows = rows
+    .filter((row) => {
+      const answer = String(row.answer || "").trim();
+      return answer && answer !== "-";
+    })
+    .slice(0, MAX_DIRECT_FAQ_ROWS);
+
+  if (!usefulRows.length) {
+    return "";
+  }
+
+  const isBuying = /ซื้อ|สั่ง|ราคา|โปร|กี่บาท|ส่ง/.test(message);
+  const intro = isBuying
+    ? "ได้ค่ะ แอดมินสรุปข้อมูลจากระบบให้ก่อนนะคะ"
+    : "แอดมินสรุปข้อมูลที่เกี่ยวข้องให้ก่อนนะคะ";
+  const answers = usefulRows
+    .map((row) => {
+      const category = row.category && row.category !== "-" ? `${row.category}: ` : "";
+      return `- ${category}${row.answer}`;
+    })
+    .join("\n");
+  const outro = "ถ้าพี่บอกพืช/อาการ/อายุต้นเพิ่มได้ แอดมินจะช่วยเช็กให้ตรงขึ้นค่ะ";
+
+  return `${intro}\n${answers}\n\n${outro}`;
 }
 
 function getSearchTerms(text) {
