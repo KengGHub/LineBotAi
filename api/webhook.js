@@ -25,6 +25,19 @@ const PRODUCT_TERM_GROUPS = [
   ["greenpluz", "greenpluz+", "กรีนพลัส"],
   ["ดินฟุ", "dinfu"],
 ];
+const FOLIAR_LIQUID_TERMS = [
+  "พลูโต 1",
+  "พลูโต 2",
+  "พลูโต 3",
+  "pluto 1",
+  "pluto 2",
+  "pluto 3",
+  "ฉีดพ่น",
+  "ผสมน้ำ",
+  "ซีซี",
+  "cc",
+];
+const TREE_AGE_TERMS = ["อายุ", "ปี", "เดือน", "ต้นเล็ก", "เพิ่งปลูก", "ปลูกใหม่", "สูง"];
 
 let faqCache = { rows: [], text: "", expiresAt: 0 };
 const userMemory = new Map();
@@ -105,9 +118,19 @@ async function generateReply(message, history = []) {
       faqText: relevantFaqText,
     });
 
-    return response.text?.trim() || FALLBACK_REPLY;
+    const replyText = response.text?.trim() || FALLBACK_REPLY;
+    if (violatesProductGuardrails(replyText, message, history)) {
+      return buildTreeAgePro5Reply(message) || buildDirectFaqReply(selectedFaqRows, message) || FALLBACK_REPLY;
+    }
+
+    return replyText;
   } catch (error) {
     console.error("Failed to generate reply", error);
+    const treeAgeReply = buildTreeAgePro5Reply(message);
+    if (treeAgeReply) {
+      return treeAgeReply;
+    }
+
     const directFaqReply = buildDirectFaqReply(selectedFaqRows, message);
     if (directFaqReply) {
       return directFaqReply;
@@ -256,6 +279,7 @@ function selectRelevantFaqRows(rows, message, history) {
   );
   const terms = getSearchTerms(query);
   const productTermGroups = getMatchedProductTermGroups(query);
+  const treeAgeQuery = isTreeAgeRecommendationQuery(query);
 
   if (!terms.length) {
     return rows.slice(0, MAX_SELECTED_FAQ_ROWS);
@@ -265,9 +289,10 @@ function selectRelevantFaqRows(rows, message, history) {
     .map((row, index) => ({
       row,
       index,
-      score: scoreFaqRow(row.searchText, terms),
+      score: scoreFaqRow(row.searchText, terms) + scoreContextBoost(row.searchText, { treeAgeQuery }),
     }))
     .filter((item) => item.score > 0)
+    .filter((item) => !treeAgeQuery || !isFoliarLiquidRow(item.row.searchText))
     .sort((a, b) => b.score - a.score || a.index - b.index);
 
   if (productTermGroups.length) {
@@ -293,6 +318,79 @@ function scoreFaqRow(text, terms) {
 
     return score;
   }, 0);
+}
+
+function scoreContextBoost(rowText, { treeAgeQuery }) {
+  if (!treeAgeQuery) {
+    return 0;
+  }
+
+  let score = 0;
+  if (rowText.includes("pro5") || rowText.includes("โปรไฟว์") || rowText.includes("พลูโตเม็ด")) {
+    score += 12;
+  }
+  if (rowText.includes("s1") || rowText.includes("เอส1")) {
+    score += 8;
+  }
+  if (rowText.includes("s2") || rowText.includes("เอส2")) {
+    score += 5;
+  }
+  if (rowText.includes("กี่เม็ด") || rowText.includes("กรัม") || rowText.includes("ฝัง")) {
+    score += 4;
+  }
+
+  return score;
+}
+
+function isTreeAgeRecommendationQuery(text) {
+  const mentionsTree = /ทุเรียน|ต้นไม้|ไม้ผล|พืช/.test(text);
+  const mentionsAgeOrSize = TREE_AGE_TERMS.some((term) => text.includes(normalizeSearchText(term))) || /\d+\s*(ปี|เดือน|เมตร)/.test(text);
+  const asksRecommendation = /แนะนำ|ใช้|แบบไหน|ตัวไหน|กี่เม็ด|กี่กรัม|บำรุง/.test(text);
+
+  return mentionsTree && mentionsAgeOrSize && asksRecommendation;
+}
+
+function isFoliarLiquidRow(text) {
+  return FOLIAR_LIQUID_TERMS.some((term) => text.includes(normalizeSearchText(term)));
+}
+
+function violatesProductGuardrails(replyText, message, history = []) {
+  const query = normalizeSearchText(
+    [
+      message,
+      ...history
+        .slice(-4)
+        .map((item) => item.text),
+    ].join(" "),
+  );
+
+  if (!isTreeAgeRecommendationQuery(query)) {
+    return false;
+  }
+
+  const reply = normalizeSearchText(replyText);
+  return isFoliarLiquidRow(reply);
+}
+
+function buildTreeAgePro5Reply(message) {
+  const query = normalizeSearchText(message);
+
+  if (!isTreeAgeRecommendationQuery(query)) {
+    return "";
+  }
+
+  if (/2\s*ปี|สองปี|สอง\s*ปี/.test(query)) {
+    return [
+      "สำหรับทุเรียนอายุประมาณ 2 ปี แนะนำเป็น Pluto Pro5 S1 ค่ะ",
+      "ใช้ขนาด 2.5 กรัม ประมาณ 1-5 เม็ดต่อต้น โดยฝังรอบทรงพุ่มลึกประมาณ 10-20 ซม.",
+      "ถ้าต้นสูงเกิน 2 เมตรหรือทรงพุ่มใหญ่แล้ว แอดมินแนะนำให้ทีมงานช่วยเช็กอีกทีว่าจะขยับเป็นเม็ด 10 กรัมเหมาะกว่าไหมค่ะ",
+    ].join("\n");
+  }
+
+  return [
+    "กรณีถามตามอายุต้น แนะนำเริ่มจากกลุ่ม Pluto Pro5 S1/S2 แบบเม็ดฝังดินนะคะ",
+    "แอดมินขอเช็กอายุต้นหรือความสูงโดยประมาณอีกนิด จะได้แนะนำขนาดเม็ดและจำนวนเม็ดให้ตรงค่ะ",
+  ].join("\n");
 }
 
 function buildDirectFaqReply(rows, message) {
