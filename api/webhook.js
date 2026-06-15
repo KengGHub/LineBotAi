@@ -236,19 +236,45 @@ function csvToFaqRows(csvText) {
 
   return dataRows
     .filter((row) => {
-      if (row.length < 3) {
+      const normalizedRow = normalizeFaqCsvRow(row);
+      if (!normalizedRow) {
         return false;
       }
 
-      const [, question, answer] = row;
-      return hasUsefulFaqCell(question) && hasUsefulFaqCell(answer);
+      return hasUsefulFaqCell(normalizedRow.question) && hasUsefulFaqCell(normalizedRow.answer);
     })
-    .map(([category, question, answer]) => ({
-      category: category || "-",
-      question: question || "-",
-      answer: answer || "-",
-      searchText: normalizeSearchText([category, question, answer].join(" ")),
-    }));
+    .map((row) => {
+      const normalizedRow = normalizeFaqCsvRow(row);
+
+      return {
+        category: normalizedRow.category || "-",
+        question: normalizedRow.question || "-",
+        keywords: normalizedRow.keywords || "",
+        answer: normalizedRow.answer || "-",
+        searchText: normalizeSearchText(
+          [
+            normalizedRow.category,
+            normalizedRow.question,
+            normalizedRow.keywords,
+            normalizedRow.answer,
+          ].join(" "),
+        ),
+      };
+    });
+}
+
+function normalizeFaqCsvRow(row) {
+  if (row.length >= 4) {
+    const [category, question, keywords, answer] = row;
+    return { category, question, keywords, answer };
+  }
+
+  if (row.length >= 3) {
+    const [category, question, answer] = row;
+    return { category, question, keywords: "", answer };
+  }
+
+  return null;
 }
 
 function faqRowsToText(rows) {
