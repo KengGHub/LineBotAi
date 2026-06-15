@@ -9,6 +9,7 @@ const FAQ_CACHE_MS = 5 * 60 * 1000;
 const MAX_SELECTED_FAQ_ROWS = 18;
 const MAX_DIRECT_FAQ_ROWS = 3;
 const MAX_HISTORY_MESSAGES = 6;
+const AI_RETRY_DELAY_MS = 900;
 const FALLBACK_REPLY = "ขออภัยค่ะ ระบบกำลังเช็กข้อมูลให้ แอดมินจะช่วยยืนยันให้นะคะ";
 
 let faqCache = { rows: [], text: "", expiresAt: 0 };
@@ -85,17 +86,9 @@ async function generateReply(message, history = []) {
     selectedFaqRows = selectRelevantFaqRows(faq.rows, message, history);
     const relevantFaqText = faqRowsToText(selectedFaqRows) || faq.text;
 
-    const response = await getGenAI().models.generateContent({
-      model: GEMINI_MODEL,
-      contents: buildUserPrompt({
-        message: buildMessageWithHistory(message, history),
-        faqText: relevantFaqText,
-      }),
-
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        temperature: 0.2,
-      },
+    const response = await generateAiContent({
+      message: buildMessageWithHistory(message, history),
+      faqText: relevantFaqText,
     });
 
     return response.text?.trim() || FALLBACK_REPLY;
@@ -108,6 +101,45 @@ async function generateReply(message, history = []) {
 
     return FALLBACK_REPLY;
   }
+}
+
+async function generateAiContent({ message, faqText }) {
+  const request = {
+    model: GEMINI_MODEL,
+    contents: buildUserPrompt({
+      message,
+      faqText,
+    }),
+
+    config: {
+      systemInstruction: SYSTEM_PROMPT,
+      temperature: 0.2,
+    },
+  };
+
+  try {
+    return await getGenAI().models.generateContent(request);
+  } catch (error) {
+    if (!isTemporaryAiError(error)) {
+      throw error;
+    }
+
+    await delay(AI_RETRY_DELAY_MS);
+    return getGenAI().models.generateContent(request);
+  }
+}
+
+function isTemporaryAiError(error) {
+  const status = error?.status || error?.error?.code;
+  const message = String(error?.message || "");
+
+  return status === 429 || status === 503 || message.includes('"code":429') || message.includes('"code":503');
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function getFaqData() {
